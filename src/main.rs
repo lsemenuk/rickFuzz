@@ -11,7 +11,7 @@ impl Corpus {
     // Return a new initialized corpus to mutate
     fn new() -> Result<Corpus, Box<dyn std::error::Error>> {
         let image = fs::read("corpus.jpg")?;
-        let seed = 0x1337feedface;
+        let seed = 0x1337fe44;
 
         Ok(Corpus {
             image,
@@ -32,9 +32,11 @@ impl Corpus {
     // Mutate corpus by flipping bytes
     fn mutate(&mut self) {
         let rand_ind = self.rand() % (self.image.len() - 1);
-        let rand_byte = self.rand() % 255;
-        self.image[rand_ind] = rand_byte as u8; 
-        println!("Flipping byte at: {} to: {}", rand_ind, rand_byte);
+        if rand_ind > 2 {
+            let rand_byte = self.rand() % 255;
+            self.image[rand_ind] = rand_byte as u8; 
+            println!("Flipping byte at: {} to: {}", rand_ind, rand_byte);
+        }
     }
 
     fn dump(&self) {
@@ -69,10 +71,8 @@ impl Fuzzer {
     }
 
     fn crash_dump(&self) {
-        let mut file = fs::File::create(format!("crash_dumps/
-                                        crash_corpus_{}.jpg", 
-                                        self.crashes.to_string(), 
-                                        ))
+        let mut file = fs::File::create(format!("crash_dumps/crash_corpus_{}.jpg", 
+                                        self.crashes.to_string(),))
                                         .expect("Error creating crash dump file");
         file.write(&self.corpus.image)
             .expect("Error writing crash dump image file.");
@@ -83,7 +83,7 @@ impl Fuzzer {
     // as well.
     fn fuzz(&mut self) {
         loop {
-            let status = process::Command::new("file")
+            let status = process::Command::new("./djpeg")
                                             .arg("input_corpus.jpg")
                                             .status()
                                             .expect("Failed to get return value of program");

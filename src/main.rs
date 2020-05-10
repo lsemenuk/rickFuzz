@@ -1,7 +1,12 @@
+extern crate debugger;
+
+use debugger::Debugger;
 use std::io::Write;
 use std::process;
 use std::fs;
 
+// This is the wrapper for the input we
+// want to modify and feed to the target program
 struct Corpus {
     image: Vec<u8>,
     seed: usize,
@@ -32,6 +37,9 @@ impl Corpus {
     // Mutate corpus by flipping bytes
     fn mutate(&mut self) {
         let rand_ind = self.rand() % (self.image.len() - 1);
+        // This is a ghetto and crappy way to make
+        // sure we preserve the jpeg header while
+        // doing byte flipping memes
         if rand_ind > 2 {
             let rand_byte = self.rand() % 255;
             self.image[rand_ind] = rand_byte as u8; 
@@ -39,6 +47,8 @@ impl Corpus {
         }
     }
 
+    // Dump the ranodmized image to disk so we can run
+    // the next iteration of djpeg
     fn dump(&self) {
         let mut file = fs::File::create("input_corpus.jpg")
             .expect("Error creating crash dump file.");
@@ -48,6 +58,10 @@ impl Corpus {
     }
 }
 
+// Our fuzzer will be comprised of a 
+// corpus and number of crashes until
+// we create coverage guidance which will most
+// likely result in a debugger being added to this struct
 struct Fuzzer {
     corpus: Corpus,
     crashes: usize,
@@ -70,6 +84,8 @@ impl Fuzzer {
         })
     }
 
+    // We will write images that cause crashes to
+    // the <root directory of this project>/crash_dumps
     fn crash_dump(&self) {
         let mut file = fs::File::create(format!("crash_dumps/crash_corpus_{}.jpg", 
                                         self.crashes.to_string(),))

@@ -1,5 +1,7 @@
-use std::time::{Duration, Instant};
-use std::collections::{HashMap, HashSet};
+use nix::sys::ptrace::{traceme};
+use std::os::unix::process::CommandExt;
+use std::process::Command;
+use std::time::{Instant};
 
 pub struct Breakpoint {
     /// Offset into binary at which to apply the breakpoint
@@ -28,8 +30,11 @@ pub struct Debugger {
     /// List of all breakpoints we want to apply to the targeted process
     all_breakpoints: Vec<Breakpoint>,
 
+    /// Hit breakpoints so we can compare to total and use as coverage metric
+    hit_breakpoints: Vec<Breakpoint>,
+
     /// List of all break points we hit during execution
-    coverage: HashMap<usize, (String, usize, String, u64)>,
+    coverage: usize,
 
     /// PID of debugee
     pid: u32,
@@ -38,3 +43,41 @@ pub struct Debugger {
     start_time: Instant,
 }
 
+impl Debugger {
+    // We want to start a new instance of the process and attach to it. We
+    // then run traceme() as a pre exec so the tracer does not miss anything 
+    // the child does. This probably doesn't matter but its good practice I guess.
+    pub fn spawn_traceable_proc(args: &Vec<&str>) -> Debugger {
+        let mut tracee_pid: u32 = 0;
+        unsafe {
+            let child = Command::new(args[0]).pre_exec(||{
+                // Set ability to use ptrace on child
+                traceme()
+                .expect("Pre exec call to traceme failed");
+                Ok(())
+            }).spawn()
+            .expect("Failed spawning debugee process");
+            tracee_pid = child.id();
+        }
+
+        Debugger::attach(tracee_pid)
+    }
+
+    pub fn attach(pid: u32) -> Debugger {
+        let  start_time = Instant::now();
+
+        // ptrace attach
+
+        // Here if we are not lazy we should:
+        // 1. See if target is x86 or x86_64
+
+        Debugger {
+            all_breakpoints: Vec::new(),
+            hit_breakpoints: Vec::new(),
+            coverage: 0,
+            pid: pid,
+            start_time: start_time,
+        }        
+    }    
+
+}

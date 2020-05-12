@@ -122,11 +122,14 @@ impl Fuzzer {
 }
 
 fn main() {
-    let mut fuzzer = Fuzzer::new().unwrap_or_else(|err| {
-        eprintln!("Problem initializing the fuzzer: {}", err);
-        process::exit(1);
-    });
+    //let mut fuzzer = Fuzzer::new().unwrap_or_else(|err| {
+    //    eprintln!("Problem initializing the fuzzer: {}", err);
+    //    process::exit(1);
+    //});
 
-    fuzzer.fuzz();
+    //fuzzer.fuzz();
+    
+    let cmd: Vec<String> = vec!["test_hello".to_string()];
+    let mut test_dbg = Debugger::spawn_traceable_proc(&cmd);
 
 }

@@ -1,4 +1,7 @@
-use nix::sys::ptrace::{traceme};
+use nix::sys::wait::{waitpid, WaitStatus};
+use nix::sys::signal::Signal;
+use nix::sys::ptrace;
+use nix::unistd::Pid;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::time::{Instant};
@@ -37,7 +40,7 @@ pub struct Debugger {
     coverage: usize,
 
     /// PID of debugee
-    pid: u32,
+    pid: Pid,
 
     /// When we attached to the target
     start_time: Instant,
@@ -47,12 +50,13 @@ impl Debugger {
     // We want to start a new instance of the process and attach to it. We
     // then run traceme() as a pre exec so the tracer does not miss anything 
     // the child does. This probably doesn't matter but its good practice I guess.
-    pub fn spawn_traceable_proc(args: &Vec<&str>) -> Debugger {
+    pub fn spawn_traceable_proc(args: &[String]) -> Debugger {
+        println!("Command: {}", args[0]);
         let mut tracee_pid: u32 = 0;
         unsafe {
-            let child = Command::new(args[0]).pre_exec(||{
+            let child = Command::new(&args[0]).pre_exec(||{
                 // Set ability to use ptrace on child
-                traceme()
+                ptrace::traceme()
                 .expect("Pre exec call to traceme failed");
                 Ok(())
             }).spawn()
@@ -60,6 +64,17 @@ impl Debugger {
             tracee_pid = child.id();
         }
 
+        // Check to make sure child is stopped in exec 
+        match waitpid(Pid::from_raw(tracee_pid as i32), None) {
+            Ok(WaitStatus::Stopped(_, Signal::SIGTRAP)) => {
+                println!("Recieved correct state")
+            },
+            _ => panic!("Child in wrong state after traceme()")
+        }
+        
+        // Bail if we try to attach to something we probably do not want to
+        assert!(tracee_pid != 0, "Are you sure you want to trace pid: 0?");
+        println!("Tracee pid: {}", tracee_pid);
         Debugger::attach(tracee_pid)
     }
 
@@ -67,6 +82,9 @@ impl Debugger {
         let  start_time = Instant::now();
 
         // ptrace attach
+        let pid = Pid::from_raw(pid as i32); 
+        ptrace::attach(pid).expect("Failed to attach ptrace");
+        println!("Attached to {}", pid);
 
         // Here if we are not lazy we should:
         // 1. See if target is x86 or x86_64

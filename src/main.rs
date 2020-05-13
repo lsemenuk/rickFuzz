@@ -129,7 +129,7 @@ fn main() {
 
     //fuzzer.fuzz();
     
-    let cmd: Vec<String> = vec!["test_hello".to_string()];
+    let cmd: Vec<String> = vec!["./test_hello".to_string()];
     let mut test_dbg = Debugger::spawn_traceable_proc(&cmd);
 
 }

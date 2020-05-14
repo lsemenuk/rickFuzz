@@ -17,7 +17,7 @@ Main goals for this project:
 2). See if we can fuzz libjpeg or some other jpeg utilities found floating around on GitHub. 
 - This fuzzer is not specific for fuzzing jpeg utilities. jpegs are a common and so many tools are written to parse them which leads to an abundance of test targets :).
 
-# Current weakpoints:
+# Current Weakpoints:
 
 1). The binary needs to be compiled with -no-pie. For now we are relying on address rather than
 binary load base + offset.

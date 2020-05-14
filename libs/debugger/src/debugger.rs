@@ -69,7 +69,7 @@ impl Debugger {
         // Check to make sure child is stopped in exec 
         match waitpid(Pid::from_raw(tracee_pid as i32), None) {
             Ok(WaitStatus::Stopped(_, Signal::SIGTRAP)) => {
-                println!("Recieved correct state")
+                //println!("Recieved correct state")
             },
             _ => panic!("Child in wrong state after traceme()")
         }
@@ -93,15 +93,12 @@ impl Debugger {
         // Breakpoint should be enable upon creation
         let enabled = true;
         
-        // Get the original byte we are swapping 0xCC for
+        // Read the orginal word from memory so we can add the int 3 to it
         let mem_word = ptrace::read(pid, addr)
             .expect("Could not read original bye from memory address");
         
-        //println!("mem_word: {:x}", mem_word);
-
+        // Save the bye we over wrote 
         let orig_byte = (mem_word & 0x000000ff) as u8;
-
-        //println!("orig_byte: {:x}", orig_byte);
 
         // Func name for readability
         let func_name = String::from("Meme");
@@ -114,16 +111,52 @@ impl Debugger {
             func_name,
         };
 
-        let replace_byte = ((mem_word & 0xffffff00) | 0xCC) as *mut c_void;
-        //println!("replace_byte: {:x}", replace_byte);
+        // The word with int 3 inserted into it
+        let replace_byte = ((mem_word & !0xff) | 0xCC) as *mut c_void;
         
-        // Write breakpoint into process memory
+        // Write the newly formed breakpoint into process memory
         ptrace::write(pid, addr, replace_byte)
             .expect("Could not write breakpoint");
 
         // Add breakpoint to debugger list of all breakpoints
         self.all_breakpoints.push(bp);
 
+    }
+
+    // Resume execution after hitting a bp
+    pub fn resume(&mut self) {
+        // Get curr regs state
+        let mut curr_regs = ptrace::getregs(self.pid)
+                         .expect("Failed getting regs in debug resume");
+ 
+        // Get addr of breakpoint so we know if we hit it
+        let curr_bp = (curr_regs.rip - 1) as *mut c_void;
+
+        for bp in &self.all_breakpoints {
+            // Replace the byte with the original
+            if bp.addr == curr_bp {
+                println!("Hit breakpoint: {:?} in function: {}",
+                         curr_bp, bp.func_name);
+                
+                // Write back original byte
+                let bytes = ptrace::read(self.pid, curr_bp)
+                    .expect("Could not read original bye from memory address");
+                
+                let replace_bytes = ((bytes & !0xff) | bp.orig_byte as i64) 
+                    as *mut c_void;
+
+                ptrace::write(self.pid, curr_bp, replace_bytes)
+                    .expect("Failed replacing bytes to cont execution");
+
+                // Reset rip
+                curr_regs.rip = curr_regs.rip - 1;
+                ptrace::setregs(self.pid, curr_regs)
+                    .expect("Could not reset rip in resume");
+
+                break;
+            }
+        }
+        ptrace::cont(self.pid, None);
     }
 
     // This function will return a debugger object with all break points
@@ -144,17 +177,18 @@ impl Debugger {
             start_time: start_time,
         }; 
 
-        //let before_break = ptrace::read(pid, 0x4004e7 as *mut c_void)
-        //    .expect("Could not read proc mem")
-        //    & 0x000000ff;
-        //println!("before_break: {:x}", before_break);
-    
         // This will call a method to initialize all breakpoints at addresses
         // of basic blocks enumerated from a program via basic blocks.
         dbgr.set_breakpoint(pid, 0x4004e7 as *mut c_void);
 
         // Restart process
         ptrace::cont(pid, None);
+
+        waitpid(pid, None).expect("failed waiting");
+
+        dbgr.resume();
+
+        //waitpid(pid, None).expect("failed waiting");
 
         dbgr
     }    

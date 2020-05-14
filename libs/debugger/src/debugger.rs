@@ -1,5 +1,5 @@
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::sys::signal::Signal;
+use nix::sys::signal::{Signal, SIGTRAP};
 use nix::sys::ptrace;
 use nix::sys::ptrace::AddressType;
 use nix::unistd::Pid;
@@ -43,11 +43,14 @@ pub struct Debugger {
     /// List of all breakpoints we want to apply to the targeted process
     all_breakpoints: Vec<Breakpoint>,
 
-    /// Hit breakpoints so we can compare to total and use as coverage metric
-    hit_breakpoints: Vec<Breakpoint>,
+    /// Total breakpoints we started with so we can get percentage coverage
+    total_original_breakpoints: usize,
+
+    /// # of hit breakpoints so we can compare to total and use as coverage metric
+    hit_breakpoints: usize,
 
     /// List of all break points we hit during execution
-    coverage: usize,
+    coverage: f64,
 
     /// PID of debugee
     pid: Option<Pid>,
@@ -64,14 +67,16 @@ impl Debugger {
             program: program,
             bp_file: bpfile,
             all_breakpoints: Vec::new(),
-            hit_breakpoints: Vec::new(),
-            coverage: 0,
+            total_original_breakpoints: 0,
+            hit_breakpoints: 0,
+            coverage: 0.0,
             pid: None, // This is a tmp val until we run the program
             start_time: None,
         }; 
 
         // We should return a debugger with only bp list populated
         dbgr.one_time_populate_bp();
+        dbgr.total_original_breakpoints = dbgr.all_breakpoints.len();
 
         dbgr
     }
@@ -161,6 +166,12 @@ impl Debugger {
         self.all_breakpoints.push(bp);
     }
 
+    pub fn update_coverage(&mut self) {
+        self.hit_breakpoints += 1;
+        self.coverage = (self.hit_breakpoints as f64 / self.total_original_breakpoints as f64) * 100.0;
+        println!("Current coverage: {:?}%", self.coverage);
+    }
+
     // Resume execution after hitting a bp
     pub fn resume(&mut self) {
         // Get curr regs state
@@ -170,7 +181,8 @@ impl Debugger {
         // Get addr of breakpoint so we know if we hit it
         let curr_bp = (curr_regs.rip - 1) as *mut c_void;
 
-        for bp in &self.all_breakpoints {
+        let mut del_ind = 0;
+        for (i, bp) in self.all_breakpoints.iter().enumerate() {
             // Replace the byte with the original
             if bp.addr == curr_bp {
                 println!("Hit breakpoint: {:?} in function: {}",
@@ -191,9 +203,17 @@ impl Debugger {
                 ptrace::setregs(self.pid.unwrap(), curr_regs)
                     .expect("Could not reset rip in resume");
 
+                del_ind = i;
                 break;
             }
         }
+        // Update coverage metrics
+        self.update_coverage();
+
+        // Remove hit bp so its not set on the next run
+        self.all_breakpoints.remove(del_ind);
+
+        // Continue from where breakpoint
         ptrace::cont(self.pid.unwrap(), None);
     }
 
@@ -227,7 +247,7 @@ impl Debugger {
             
             // The word with int 3 inserted into it
             let replace_byte = ((mem_word & !0xff) | 0xCC) as *mut c_void;
-            println!("Replace byte: {:?}", replace_byte);
+            //println!("Replace byte: {:?}", replace_byte);
             
             // Write the newly formed breakpoint into process memory
             ptrace::write(self.pid.unwrap(), bp.addr, replace_byte)
@@ -235,8 +255,9 @@ impl Debugger {
         }
     }
 
-    // This function will return a debugger object with all break points
-    // initialized in the target process.
+    // This function spawns a new process and sets the appropriate
+    // break points. Once set the process is run until it exits and
+    // collects coverage while its running.
     pub fn attach_and_run(&mut self) {
         // Set time we attached
         self.start_time = Some(Instant::now());
@@ -250,9 +271,12 @@ impl Debugger {
         // Restart process
         ptrace::cont(self.pid.unwrap(), None);
 
-        waitpid(self.pid.unwrap(), None).expect("failed waiting");
-
-        self.resume();
+        // Loop and wait for signals that we hit a breakpoint
+        while(waitpid(self.pid.unwrap(), None).expect("failed waiting") 
+              == WaitStatus::Stopped(self.pid.unwrap(), SIGTRAP))
+        {
+            self.resume();
+        }
 
     }    
 

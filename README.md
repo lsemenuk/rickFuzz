@@ -19,8 +19,9 @@ Main goals for this project:
 
 # Current weakpoints:
 
-1) The binary needs to be compiled with -no-pie. For now we are relying on address rather than
+1). The binary needs to be compiled with -no-pie. For now we are relying on address rather than
 binary load base + offset.
  - Should be fixed soon
-2) Yeah this is my first ever Rust project so it may look pretty ghetto!
+
+2). Yeah this is my first ever Rust project so it may look pretty ghetto!
  - Improvements coming soon(tm)

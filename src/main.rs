@@ -129,7 +129,8 @@ fn main() {
 
     //fuzzer.fuzz();
     
-    let cmd: Vec<String> = vec!["./test_hello".to_string()];
-    let mut test_dbg = Debugger::spawn_traceable_proc(&cmd);
+    //let cmd: Vec<String> = vec!["./test_hello".to_string()];
+    let mut test_dbg = Debugger::new(String::from("./test_hello"), String::from("breakpoints.txt"));
+    test_dbg.attach_and_run();
 
 }

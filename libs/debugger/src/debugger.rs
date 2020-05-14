@@ -7,7 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::time::{Instant};
 use std::ffi::c_void;
-use std::io::{self,BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 use std::fs::File;
 
 pub struct Breakpoint {
@@ -34,6 +34,12 @@ pub struct Breakpoint {
 }
 
 pub struct Debugger {
+    /// Program and argv
+    program: String,
+    
+    /// Path to file containing bp's
+    bp_file: String,
+
     /// List of all breakpoints we want to apply to the targeted process
     all_breakpoints: Vec<Breakpoint>,
 
@@ -44,21 +50,48 @@ pub struct Debugger {
     coverage: usize,
 
     /// PID of debugee
-    pid: Pid,
+    pid: Option<Pid>,
 
     /// When we attached to the target
-    start_time: Instant,
+    start_time: Option<Instant>,
 }
 
 impl Debugger {
+    // Init a debugger object
+    pub fn new(program: String, bpfile: String) -> Debugger {
+        // Create new dbgr and fill in values
+        let mut dbgr = Debugger {
+            program: program,
+            bp_file: bpfile,
+            all_breakpoints: Vec::new(),
+            hit_breakpoints: Vec::new(),
+            coverage: 0,
+            pid: None, // This is a tmp val until we run the program
+            start_time: None,
+        }; 
+
+        // We should return a debugger with only bp list populated
+        dbgr.one_time_populate_bp();
+
+        dbgr
+    }
+
+    // This is kinda hacky to populate the list of bp but its only run once
+    pub fn one_time_populate_bp(&mut self) {
+        self.spawn_traceable_proc();
+        self.init_breakpoints();
+        ptrace::kill(self.pid.unwrap()).expect("could not kill init proc");
+
+    }
+
     // We want to start a new instance of the process and attach to it. We
     // then run traceme() as a pre exec so the tracer does not miss anything 
     // the child does. This probably doesn't matter but its good practice I guess.
-    pub fn spawn_traceable_proc(args: &[String]) -> Debugger {
-        println!("Command: {}", args[0]);
+    pub fn spawn_traceable_proc(&mut self) {
+        println!("Command: {}", &self.program);
         let mut tracee_pid: u32 = 0;
         unsafe {
-            let child = Command::new(&args[0]).pre_exec(||{
+            let child = Command::new(&self.program).pre_exec(||{
                 // Set ability to use ptrace on child
                 ptrace::traceme()
                 .expect("Pre exec call to traceme failed");
@@ -68,8 +101,11 @@ impl Debugger {
             tracee_pid = child.id();
         }
 
+        // Update our child pid
+        self.pid = Some(Pid::from_raw(tracee_pid as i32));
+
         // Check to make sure child is stopped in exec 
-        match waitpid(Pid::from_raw(tracee_pid as i32), None) {
+        match waitpid(self.pid.unwrap(), None) {
             Ok(WaitStatus::Stopped(_, Signal::SIGTRAP)) => {
                 //println!("Recieved correct state")
             },
@@ -79,7 +115,6 @@ impl Debugger {
         // Bail if we try to attach to something we probably do not want to
         assert!(tracee_pid != 0, "Are you sure you want to trace pid: 0?");
         println!("Tracee pid: {}", tracee_pid);
-        Debugger::attach(tracee_pid)
     }
 
     // Construct and set the breakpoint in the target process
@@ -87,7 +122,7 @@ impl Debugger {
     // byte pointed to by the breakpoint address to 0xcc(halt). Then
     // when the breakpoint is hit we replace the the halt with the 
     // original instruction and continue execution by setting eip = eip - 1.
-    pub fn set_breakpoint(&mut self, pid: Pid, bp_addr: AddressType, fname: &str) {
+    pub fn append_breakpoint(&mut self, bp_addr: AddressType, fname: &str) {
 
         //Breakpoint address
         let addr = bp_addr;
@@ -96,7 +131,7 @@ impl Debugger {
         let enabled = true;
         
         // Read the orginal word from memory so we can add the int 3 to it
-        let mem_word = ptrace::read(pid, addr)
+        let mem_word = ptrace::read(self.pid.unwrap(), addr)
             .expect("Could not read original bye from memory address");
         
         // Save the bye we over wrote 
@@ -112,7 +147,8 @@ impl Debugger {
             orig_byte,
             func_name,
         };
-
+    
+        /*
         // The word with int 3 inserted into it
         let replace_byte = ((mem_word & !0xff) | 0xCC) as *mut c_void;
         
@@ -120,15 +156,15 @@ impl Debugger {
         ptrace::write(pid, addr, replace_byte)
             .expect("Could not write breakpoint");
 
+        */
         // Add breakpoint to debugger list of all breakpoints
         self.all_breakpoints.push(bp);
-
     }
 
     // Resume execution after hitting a bp
     pub fn resume(&mut self) {
         // Get curr regs state
-        let mut curr_regs = ptrace::getregs(self.pid)
+        let mut curr_regs = ptrace::getregs(self.pid.unwrap())
                          .expect("Failed getting regs in debug resume");
  
         // Get addr of breakpoint so we know if we hit it
@@ -141,31 +177,31 @@ impl Debugger {
                          curr_bp, bp.func_name);
                 
                 // Write back original byte
-                let bytes = ptrace::read(self.pid, curr_bp)
+                let bytes = ptrace::read(self.pid.unwrap(), curr_bp)
                     .expect("Could not read original bye from memory address");
                 
                 let replace_bytes = ((bytes & !0xff) | bp.orig_byte as i64) 
                     as *mut c_void;
 
-                ptrace::write(self.pid, curr_bp, replace_bytes)
+                ptrace::write(self.pid.unwrap(), curr_bp, replace_bytes)
                     .expect("Failed replacing bytes to cont execution");
 
                 // Reset rip
                 curr_regs.rip = curr_regs.rip - 1;
-                ptrace::setregs(self.pid, curr_regs)
+                ptrace::setregs(self.pid.unwrap(), curr_regs)
                     .expect("Could not reset rip in resume");
 
                 break;
             }
         }
-        ptrace::cont(self.pid, None);
+        ptrace::cont(self.pid.unwrap(), None);
     }
 
     // Takes the file containing the breakpoints and func names and populates
     // the debugger list of breakpoints
-    pub fn init_breakpoints(&mut self, infile: &str) {
+    pub fn init_breakpoints(&mut self) {
         //Open the breakpoint file
-        let f = File::open(infile).expect("Could not open breakpoint file");
+        let f = File::open(&self.bp_file).expect("Could not open breakpoint file");
 
         let f = BufReader::new(f);
 
@@ -178,44 +214,46 @@ impl Debugger {
             let addr = i64::from_str_radix(addr, 16).unwrap() as *mut c_void;
             //println!("cleaned addr {:?}", addr);
 
-           self.set_breakpoint(self.pid, addr, &bp_info[1]); 
+           self.append_breakpoint(addr, &bp_info[1]); 
+        }
+    }
+    
+    // Write the breakpoints we initialized into the process
+    pub fn set_bp_from_list(&mut self) {
+        for bp in &self.all_breakpoints {
+            // Read the orginal word from memory so we can add the int 3 to it
+            let mem_word = ptrace::read(self.pid.unwrap(), bp.addr)
+                .expect("Could not read original bye from memory address");
+            
+            // The word with int 3 inserted into it
+            let replace_byte = ((mem_word & !0xff) | 0xCC) as *mut c_void;
+            println!("Replace byte: {:?}", replace_byte);
+            
+            // Write the newly formed breakpoint into process memory
+            ptrace::write(self.pid.unwrap(), bp.addr, replace_byte)
+                .expect("Could not write breakpoint");
         }
     }
 
     // This function will return a debugger object with all break points
     // initialized in the target process.
-    pub fn attach(pid: u32) -> Debugger {
-        let  start_time = Instant::now();
+    pub fn attach_and_run(&mut self) {
+        // Set time we attached
+        self.start_time = Some(Instant::now());
 
-        // ptrace should be attached from the traceme()
-        // in spawn_traceable_proc
-        let pid = Pid::from_raw(pid as i32); 
-        
-        // Construct debugger
-        let mut dbgr = Debugger {
-            all_breakpoints: Vec::new(),
-            hit_breakpoints: Vec::new(),
-            coverage: 0,
-            pid: pid,
-            start_time: start_time,
-        }; 
+        // Spawn the process
+        self.spawn_traceable_proc();
 
-        // This will call a method to initialize all breakpoints at addresses
-        // of basic blocks enumerated from a program via basic blocks.
-        //dbgr.set_breakpoint(pid, 0x4004e7 as *mut c_void);
-
-        dbgr.init_breakpoints("breakpoints.txt");
+        // Now we can set the breakpoints
+        self.set_bp_from_list();
 
         // Restart process
-        ptrace::cont(pid, None);
+        ptrace::cont(self.pid.unwrap(), None);
 
-        waitpid(pid, None).expect("failed waiting");
+        waitpid(self.pid.unwrap(), None).expect("failed waiting");
 
-        dbgr.resume();
+        self.resume();
 
-        //waitpid(pid, None).expect("failed waiting");
-
-        dbgr
     }    
 
 }

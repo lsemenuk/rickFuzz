@@ -7,6 +7,8 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::time::{Instant};
 use std::ffi::c_void;
+use std::io::{self,BufRead, BufReader};
+use std::fs::File;
 
 pub struct Breakpoint {
     /// Addr in binary at which to apply the breakpoint
@@ -85,7 +87,7 @@ impl Debugger {
     // byte pointed to by the breakpoint address to 0xcc(halt). Then
     // when the breakpoint is hit we replace the the halt with the 
     // original instruction and continue execution by setting eip = eip - 1.
-    pub fn set_breakpoint(&mut self, pid: Pid, bp_addr: AddressType) {
+    pub fn set_breakpoint(&mut self, pid: Pid, bp_addr: AddressType, fname: &str) {
 
         //Breakpoint address
         let addr = bp_addr;
@@ -101,7 +103,7 @@ impl Debugger {
         let orig_byte = (mem_word & 0x000000ff) as u8;
 
         // Func name for readability
-        let func_name = String::from("Meme");
+        let func_name = String::from(fname);
 
         // Construct breakpoint obj
         let bp = Breakpoint {
@@ -159,6 +161,27 @@ impl Debugger {
         ptrace::cont(self.pid, None);
     }
 
+    // Takes the file containing the breakpoints and func names and populates
+    // the debugger list of breakpoints
+    pub fn init_breakpoints(&mut self, infile: &str) {
+        //Open the breakpoint file
+        let f = File::open(infile).expect("Could not open breakpoint file");
+
+        let f = BufReader::new(f);
+
+        for line in f.lines() {
+            let tmpstr = line.unwrap();
+            let bp_info: Vec<&str> = tmpstr.split(' ').collect();
+            //println!("{}:{}", &bp_info[0], &bp_info[1]);
+
+            let addr = &bp_info[0].trim_start_matches("0x");
+            let addr = i64::from_str_radix(addr, 16).unwrap() as *mut c_void;
+            //println!("cleaned addr {:?}", addr);
+
+           self.set_breakpoint(self.pid, addr, &bp_info[1]); 
+        }
+    }
+
     // This function will return a debugger object with all break points
     // initialized in the target process.
     pub fn attach(pid: u32) -> Debugger {
@@ -179,7 +202,9 @@ impl Debugger {
 
         // This will call a method to initialize all breakpoints at addresses
         // of basic blocks enumerated from a program via basic blocks.
-        dbgr.set_breakpoint(pid, 0x4004e7 as *mut c_void);
+        //dbgr.set_breakpoint(pid, 0x4004e7 as *mut c_void);
+
+        dbgr.init_breakpoints("breakpoints.txt");
 
         // Restart process
         ptrace::cont(pid, None);

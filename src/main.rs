@@ -43,7 +43,7 @@ impl Corpus {
         if rand_ind > 2 {
             let rand_byte = self.rand() % 255;
             self.image[rand_ind] = rand_byte as u8; 
-            println!("Flipping byte at: {} to: {}", rand_ind, rand_byte);
+            //println!("Flipping byte at: {} to: {}", rand_ind, rand_byte);
         }
     }
 
@@ -65,6 +65,7 @@ impl Corpus {
 struct Fuzzer {
     corpus: Corpus,
     crashes: usize,
+    debugger: Debugger,
 }
 
 impl Fuzzer {
@@ -73,14 +74,15 @@ impl Fuzzer {
     fn new() -> Result<Fuzzer, Box<dyn std::error::Error>> {
         let corpus = Corpus::new()?;
         let crashes: usize = 0;
-
+        let debugger = Debugger::new(String::from("./djpeg"),
+                                     String::from("breakpoints.txt"));
         // Do not want to err if dir already exists
         fs::create_dir_all("crash_dumps")?;
 
         Ok(Fuzzer {
             corpus,
             crashes,
-            
+            debugger,
         })
     }
 
@@ -99,7 +101,7 @@ impl Fuzzer {
     // as well.
     fn fuzz(&mut self) {
         loop {
-            let status = process::Command::new("./djpeg")
+         /*   let status = process::Command::new("./djpeg")
                                             .arg("input_corpus.jpg")
                                             .status()
                                             .expect("Failed to get return value of program");
@@ -110,9 +112,12 @@ impl Fuzzer {
                 self.crashes += 1;
                 self.crash_dump();
             }
-            
+           */
+
+            self.debugger.attach_and_run();
+
             // Mutate image and dump it to disk
-            // this is probably a huge time sink
+            // this is probably a huge time sink(especially on wsl)
             // might be worth looking into keeping 
             // a memfd or something
             self.corpus.mutate();
@@ -122,15 +127,15 @@ impl Fuzzer {
 }
 
 fn main() {
-    //let mut fuzzer = Fuzzer::new().unwrap_or_else(|err| {
-    //    eprintln!("Problem initializing the fuzzer: {}", err);
-    //    process::exit(1);
-    //});
+    let mut fuzzer = Fuzzer::new().unwrap_or_else(|err| {
+        eprintln!("Problem initializing the fuzzer: {}", err);
+        process::exit(1);
+    });
 
-    //fuzzer.fuzz();
+    fuzzer.fuzz();
     
     //let cmd: Vec<String> = vec!["./test_hello".to_string()];
-    let mut test_dbg = Debugger::new(String::from("./test_hello"), String::from("breakpoints.txt"));
-    test_dbg.attach_and_run();
+    //let mut test_dbg = Debugger::new(String::from("./test_hello"), String::from("breakpoints.txt"));
+    //test_dbg.attach_and_run();
 
 }

@@ -4,7 +4,7 @@ use nix::sys::ptrace;
 use nix::sys::ptrace::AddressType;
 use nix::unistd::Pid;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Instant};
 use std::ffi::c_void;
 use std::io::{BufRead, BufReader};
@@ -93,7 +93,7 @@ impl Debugger {
     // then run traceme() as a pre exec so the tracer does not miss anything 
     // the child does. This probably doesn't matter but its good practice I guess.
     pub fn spawn_traceable_proc(&mut self) {
-        println!("Command: {}", &self.program);
+        //println!("Command: {}", &self.program);
         let mut tracee_pid: u32 = 0;
         unsafe {
             let child = Command::new(&self.program).pre_exec(||{
@@ -101,7 +101,10 @@ impl Debugger {
                 ptrace::traceme()
                 .expect("Pre exec call to traceme failed");
                 Ok(())
-            }).spawn()
+            }).arg("input_corpus.jpg")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
             .expect("Failed spawning debugee process");
             tracee_pid = child.id();
         }
@@ -119,7 +122,7 @@ impl Debugger {
 
         // Bail if we try to attach to something we probably do not want to
         assert!(tracee_pid != 0, "Are you sure you want to trace pid: 0?");
-        println!("Tracee pid: {}", tracee_pid);
+        //println!("Tracee pid: {}", tracee_pid);
     }
 
     // Construct and set the breakpoint in the target process
@@ -131,6 +134,7 @@ impl Debugger {
 
         //Breakpoint address
         let addr = bp_addr;
+        //println!("addr {:?}", addr);
 
         // Breakpoint should be enable upon creation
         let enabled = true;
@@ -138,6 +142,8 @@ impl Debugger {
         // Read the orginal word from memory so we can add the int 3 to it
         let mem_word = ptrace::read(self.pid.unwrap(), addr)
             .expect("Could not read original bye from memory address");
+
+        //println!("mem_word: {:x}", mem_word);
         
         // Save the bye we over wrote 
         let orig_byte = (mem_word & 0x000000ff) as u8;
@@ -169,7 +175,7 @@ impl Debugger {
     pub fn update_coverage(&mut self) {
         self.hit_breakpoints += 1;
         self.coverage = (self.hit_breakpoints as f64 / self.total_original_breakpoints as f64) * 100.0;
-        println!("Current coverage: {:?}%", self.coverage);
+        println!("Current coverage: {:.1}%", self.coverage);
     }
 
     // Resume execution after hitting a bp

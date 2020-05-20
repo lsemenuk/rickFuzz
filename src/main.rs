@@ -62,20 +62,19 @@ impl Corpus {
 // corpus and number of crashes until
 // we create coverage guidance which will most
 // likely result in a debugger being added to this struct
-struct Fuzzer {
+struct Fuzzer<'a> {
     corpus: Corpus,
     crashes: usize,
-    debugger: Debugger,
+    debugger: Debugger<'a>,
 }
 
-impl Fuzzer {
+impl<'a> Fuzzer<'a> {
     // Return a fuzzer with an initialized corpus to mutate
     // and setup directory to hold crashdumps
-    fn new() -> Result<Fuzzer, Box<dyn std::error::Error>> {
+    fn new(program: &'a [String], bpfile: String) -> Result<Fuzzer<'a>, Box<dyn std::error::Error>> {
         let corpus = Corpus::new()?;
         let crashes: usize = 0;
-        let debugger = Debugger::new(String::from("./djpeg"),
-                                     String::from("breakpoints.txt"));
+        let debugger = Debugger::new(program, bpfile);
         // Do not want to err if dir already exists
         fs::create_dir_all("crash_dumps")?;
 
@@ -127,15 +126,17 @@ impl Fuzzer {
 }
 
 fn main() {
-    let mut fuzzer = Fuzzer::new().unwrap_or_else(|err| {
+    
+    let cmd = vec![String::from("./djpeg"), String::from("input_corpus.jpg")];
+    let bpfile = String::from("breakpoints.txt");
+    let mut fuzzer = Fuzzer::new(&cmd, bpfile).unwrap_or_else(|err| {
         eprintln!("Problem initializing the fuzzer: {}", err);
         process::exit(1);
     });
 
     fuzzer.fuzz();
     
-    //let cmd: Vec<String> = vec!["./test_hello".to_string()];
-    //let mut test_dbg = Debugger::new(String::from("./test_hello"), String::from("breakpoints.txt"));
+    //let mut test_dbg = Debugger::new(&cmd, &bpfile);
     //test_dbg.attach_and_run();
 
 }

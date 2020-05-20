@@ -33,9 +33,9 @@ pub struct Breakpoint {
     //freq: u64,
 }
 
-pub struct Debugger {
+pub struct Debugger<'a> {
     /// Program and argv
-    program: String,
+    program: &'a [String],
     
     /// Path to file containing bp's
     bp_file: String,
@@ -59,9 +59,9 @@ pub struct Debugger {
     start_time: Option<Instant>,
 }
 
-impl Debugger {
+impl<'a> Debugger<'a> {
     // Init a debugger object
-    pub fn new(program: String, bpfile: String) -> Debugger {
+    pub fn new(program: &'a [String], bpfile: String) -> Debugger<'a> {
         // Create new dbgr and fill in values
         let mut dbgr = Debugger {
             program: program,
@@ -96,12 +96,13 @@ impl Debugger {
         //println!("Command: {}", &self.program);
         let mut tracee_pid: u32 = 0;
         unsafe {
-            let child = Command::new(&self.program).pre_exec(||{
+            let child = Command::new(&self.program[0]).pre_exec(||{
                 // Set ability to use ptrace on child
                 ptrace::traceme()
                 .expect("Pre exec call to traceme failed");
                 Ok(())
-            }).arg("input_corpus.jpg")
+            })
+            .args(&self.program[1..])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

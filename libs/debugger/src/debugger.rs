@@ -1,4 +1,5 @@
 use nix::sys::wait::{waitpid, WaitStatus};
+use std::collections::HashMap;
 use nix::sys::signal::{Signal, SIGTRAP};
 use nix::sys::ptrace;
 use nix::sys::ptrace::AddressType;
@@ -40,8 +41,8 @@ pub struct Debugger<'a> {
     /// Path to file containing bp's
     bp_file: String,
 
-    /// List of all breakpoints we want to apply to the targeted process
-    all_breakpoints: Vec<Breakpoint>,
+    /// Map of all breakpoints we want to apply to the targeted process
+    all_breakpoints: HashMap<*mut c_void, Breakpoint>,
 
     /// Total breakpoints we started with so we can get percentage coverage
     total_original_breakpoints: usize,
@@ -66,7 +67,7 @@ impl<'a> Debugger<'a> {
         let mut dbgr = Debugger {
             program: program,
             bp_file: bpfile,
-            all_breakpoints: Vec::new(),
+            all_breakpoints: HashMap::new(),
             total_original_breakpoints: 0,
             hit_breakpoints: 0,
             coverage: 0.0,
@@ -76,7 +77,7 @@ impl<'a> Debugger<'a> {
 
         // We should return a debugger with only bp list populated
         dbgr.one_time_populate_bp();
-        dbgr.total_original_breakpoints = dbgr.all_breakpoints.len();
+        dbgr.total_original_breakpoints = dbgr.all_breakpoints.keys().len();
 
         dbgr
     }
@@ -160,17 +161,8 @@ impl<'a> Debugger<'a> {
             func_name,
         };
     
-        /*
-        // The word with int 3 inserted into it
-        let replace_byte = ((mem_word & !0xff) | 0xCC) as *mut c_void;
-        
-        // Write the newly formed breakpoint into process memory
-        ptrace::write(pid, addr, replace_byte)
-            .expect("Could not write breakpoint");
-
-        */
-        // Add breakpoint to debugger list of all breakpoints
-        self.all_breakpoints.push(bp);
+        // Add breakpoint to map of all breakpoints
+        self.all_breakpoints.insert(addr, bp);
     }
 
     pub fn update_coverage(&mut self) {
@@ -188,37 +180,35 @@ impl<'a> Debugger<'a> {
         // Get addr of breakpoint so we know if we hit it
         let curr_bp = (curr_regs.rip - 1) as *mut c_void;
 
-        let mut del_ind = 0;
-        for (i, bp) in self.all_breakpoints.iter().enumerate() {
-            // Replace the byte with the original
-            if bp.addr == curr_bp {
-                println!("Hit breakpoint: {:?} in function: {}",
-                         curr_bp, bp.func_name);
-                
-                // Write back original byte
-                let bytes = ptrace::read(self.pid.unwrap(), curr_bp)
-                    .expect("Could not read original bye from memory address");
-                
-                let replace_bytes = ((bytes & !0xff) | bp.orig_byte as i64) 
-                    as *mut c_void;
+        // If bp is in the map we want to record the hit and get rid of it
+        // by replacing the 0xCC byte with its original byte
+        if self.all_breakpoints.contains_key(&curr_bp) {
+            // Retrieve bp from hashmap
+            let bp = self.all_breakpoints.get(&curr_bp).unwrap();
 
-                ptrace::write(self.pid.unwrap(), curr_bp, replace_bytes)
-                    .expect("Failed replacing bytes to cont execution");
+            println!("Hit breakpoint: {:?} in function: {}",
+                     curr_bp, bp.func_name);
+            
+            // Write back original byte
+            let bytes = ptrace::read(self.pid.unwrap(), curr_bp)
+                .expect("Could not read original bye from memory address");
+            
+            let replace_bytes = ((bytes & !0xff) | bp.orig_byte as i64) 
+                as *mut c_void;
 
-                // Reset rip
-                curr_regs.rip = curr_regs.rip - 1;
-                ptrace::setregs(self.pid.unwrap(), curr_regs)
-                    .expect("Could not reset rip in resume");
+            ptrace::write(self.pid.unwrap(), curr_bp, replace_bytes)
+                .expect("Failed replacing bytes to cont execution");
 
-                del_ind = i;
-                break;
-            }
+            // Reset rip
+            curr_regs.rip = curr_regs.rip - 1;
+            ptrace::setregs(self.pid.unwrap(), curr_regs)
+                .expect("Could not reset rip in resume");
         }
         // Update coverage metrics
         self.update_coverage();
 
         // Remove hit bp so its not set on the next run
-        self.all_breakpoints.remove(del_ind);
+        self.all_breakpoints.remove(&curr_bp);
 
         // Continue from where breakpoint
         ptrace::cont(self.pid.unwrap(), None);
@@ -247,7 +237,7 @@ impl<'a> Debugger<'a> {
     
     // Write the breakpoints we initialized into the process
     pub fn set_bp_from_list(&mut self) {
-        for bp in &self.all_breakpoints {
+        for bp in self.all_breakpoints.values() {
             // Read the orginal word from memory so we can add the int 3 to it
             let mem_word = ptrace::read(self.pid.unwrap(), bp.addr)
                 .expect("Could not read original bye from memory address");
